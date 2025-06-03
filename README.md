@@ -37,17 +37,17 @@ Ajouter un mécanisme de marche/arrêt à un automate en fonction de la position
        |       (présence continue)    |
        |                              |
        |                             (détection <1m)
-  (plus de détection)                ↑
-       ↓                            |
-[Temporisation]                     |
-       |      (aucune détection 30s)|
-       ↓                            |
-   [En_veille]                      |
-       ↑                            |
-       |                            |
- (bouton appuyé)                    |
-       ↓                            |
- [Pause_bouton] (10s) --------------+
+  (plus de détection)                 ↑
+       ↓                              |
+[Temporisation]                       |
+       |      (aucune détection 30s)  |
+       ↓                              |
+   [En_veille]                        |
+       ↑                              |
+       |                              |
+ (bouton appuyé)                      |
+       ↓                              |
+ [Pause_bouton] (10s) ----------------+
        ↓
  (fin pause)
        ↓
