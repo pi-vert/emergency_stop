@@ -212,4 +212,25 @@ interval:
                     }
                   }
                 }
+
+i2c:
+  sda: GPIO21
+  scl: GPIO22
+  scan: true
+
+display:
+  - platform: lcd_pcf8574
+    id: ecran
+    dimensions: 16x2
+    address: 0x27  # ou 0x3F selon le modèle
+    lambda: |-
+      if (id(pause_active)) {
+        it.print("PAUSE 10s");
+      } else if (id(presence_detected)) {
+        it.print("Moteur actif");
+      } else {
+        it.print("En attente...");
+      }
 ```
+
+
