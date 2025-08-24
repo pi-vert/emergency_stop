@@ -1,6 +1,6 @@
-# emergency_stop
+# AutoStopStart
 
-Ajouter un mécanisme de marche/arrêt à un automate en fonction de la position des visiteurs et de l'action sur un bouton d'arrêt d'urgence.
+Ajouter un mécanisme de marche/arrêt à un automate en fonction de la position des visiteurs et de l'action sur un bouton d'arrêt d'urgence. Le mécanisme doit être priorisé pour un réactivité maximale.
 
 ## Principes
 
@@ -26,9 +26,50 @@ Ajouter un mécanisme de marche/arrêt à un automate en fonction de la position
 | `Temporisation` | Détection < 1 m                | `Actif`         | Redémarrer le mécanisme      |
 | `Temporisation` | 30s écoulées sans détection    | `En_veille`     | Arrêt complet                |
 
+```mermaid
+flowchart TD
+
+A[Boot ESP32] --> B[Initialisation variables & sliders]
+B --> C[LCD allumé à 50%]
+
+%% Boucle principale
+C --> D[Lecture LD2410 (distance, présence...)]
+D --> E{Bouton STOP appuyé ?}
+
+%% Gestion arrêt d'urgence
+E -- Oui --> F[Affiche "STOP" sur LCD]
+F --> G[Relais OFF]
+G --> H[Countdown = delay_off]
+
+E -- Non --> I[Affiche distance sur LCD]
+
+%% Vérification distance
+I --> J{Distance < seuil ?}
+J -- Non --> K[Pas d'action]
+J -- Oui --> L{Countdown == 0 ?}
+
+L -- Non --> M[Attendre fin du compte à rebours]
+L -- Oui --> N[Relais ON]
+N --> O[Countdown = delay_on]
+
+%% Gestion relais actif
+O --> P{Relais ON ?}
+P -- Oui --> Q{Countdown == 0 ?}
+Q -- Non --> R[Affiche "ON" et countdown sur LCD]
+Q -- Oui --> S[Relais OFF]
+S --> T[Countdown = delay_off]
+
+P -- Non --> U[Affiche "OFF" et countdown sur LCD]
+R --> D
+U --> D
+T --> D
+H --> D
+```
+
+
 ### Diagramme de la machine à états
 
-```
+```mermaid
    [En_veille]
        |
    (détection <1m)
@@ -85,152 +126,3 @@ stateDiagram-v2
 - Bouton = pause 10s
 - Timeout d’absence = 30s
 - Redémarrage auto si présence persiste après la pause
-
-### Code 
-
-```yaml
-esphome:
-  name: automate_ld2410
-  platform: ESP32
-  board: esp32dev
-
-# Réseau et logs
-wifi:
-  ssid: "your_wifi"
-  password: "your_password"
-logger:
-
-# Web (optionnel)
-web_server:
-
-# API Home Assistant (optionnel)
-api:
-ota:
-
-# UART pour LD2410
-uart:
-  rx_pin: GPIO16
-  tx_pin: GPIO17
-  baud_rate: 256000
-
-ld2410:
-  id: radar
-
-binary_sensor:
-  - platform: gpio
-    id: bouton_pause
-    pin:
-      number: GPIO4
-      mode: INPUT_PULLUP
-      inverted: true
-    on_press:
-      then:
-        - script.execute: pause_bouton
-
-output:
-  - platform: gpio
-    pin: GPIO2
-    id: moteur
-
-switch:
-  - platform: output
-    id: moteur_switch
-    output: moteur
-
-sensor:
-  - platform: ld2410
-    moving_distance:
-      id: distance
-
-globals:
-  - id: presence_detected
-    type: bool
-    restore_value: no
-    initial_value: "false"
-
-  - id: timer_absence
-    type: int
-    restore_value: no
-    initial_value: "0"
-
-  - id: pause_active
-    type: bool
-    restore_value: no
-    initial_value: "false"
-
-script:
-  - id: pause_bouton
-    mode: restart
-    then:
-      - logger.log: "Pause bouton activée"
-      - globals.set:
-          id: pause_active
-          value: "true"
-      - switch.turn_off: moteur_switch
-      - delay: 10s
-      - if:
-          condition:
-            lambda: 'return id(distance).state < 1.0;'
-          then:
-            - logger.log: "Présence toujours là, redémarrage"
-            - switch.turn_on: moteur_switch
-            - globals.set:
-                id: presence_detected
-                value: "true"
-          else:
-            - logger.log: "Pas de présence, entrée dans temporisation"
-            - globals.set:
-                id: presence_detected
-                value: "false"
-      - globals.set:
-          id: pause_active
-          value: "false"
-
-interval:
-  - interval: 1s
-    then:
-      - if:
-          condition:
-            lambda: 'return !id(pause_active);'
-          then:
-            - lambda: |-
-                if (id(distance).state < 1.0) {
-                  if (!id(presence_detected)) {
-                    id(moteur_switch).turn_on();
-                    id(presence_detected) = true;
-                    id(timer_absence) = 0;
-                  } else {
-                    id(timer_absence) = 0;
-                  }
-                } else {
-                  if (id(presence_detected)) {
-                    id(timer_absence) += 1;
-                    if (id(timer_absence) >= 30) {
-                      id(moteur_switch).turn_off();
-                      id(presence_detected) = false;
-                      id(timer_absence) = 0;
-                    }
-                  }
-                }
-
-i2c:
-  sda: GPIO21
-  scl: GPIO22
-  scan: true
-
-display:
-  - platform: lcd_pcf8574
-    id: ecran
-    dimensions: 16x2
-    address: 0x27  # ou 0x3F selon le modèle
-    lambda: |-
-      if (id(pause_active)) {
-        it.print("PAUSE 10s");
-      } else if (id(presence_detected)) {
-        it.print("Moteur actif");
-      } else {
-        it.print("En attente...");
-      }
-```
-
-
