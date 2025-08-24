@@ -1,302 +1,197 @@
-substitutions:
-  name: esphome-web-a86efc
-  friendly_name: AutoStopStart
+# 🚀 AutoStopStart ESPHome
 
-esphome:
-  name: ${name}
-  friendly_name: ${friendly_name}
-  min_version: 2024.6.0
-  name_add_mac_suffix: false
-  project:
-    name: esphome.web
-    version: dev
-  on_boot:
-    priority: -100  # Exécuté très tôt pour garantir que les sliders reflètent les valeurs globales
-    then:
-      - number.set:
-          id: delay_on_slider
-          value: !lambda 'return id(delay_on);'
-      - number.set:
-          id: delay_off_slider
-          value: !lambda 'return id(delay_off);'
-      - number.set:
-          id: distance_slider
-          value: !lambda 'return id(distance);'
-      - output.set_level:
-          id: lcd_backlight
-          level: 0.5   # Luminosité initiale de l'écran LCD
+## 📖 Description
+Ce projet **ESPHome** utilise un capteur **LD2410** pour mesurer la distance et détecter une présence.  
+En fonction d’un seuil défini et de temporisations configurables, un **relais** est activé ou désactivé automatiquement.  
+Un **bouton STOP** permet d’interrompre immédiatement le système en toute sécurité.  
+Un écran **LCD I2C** affiche l’état du relais, la distance mesurée et un compte à rebours.
 
-esp32:
-  board: esp32dev
-  framework:
-    type: esp-idf
-    version: recommended
+---
 
-# Logs série
-logger:
+## ⚙️ Matériel requis
+- ESP32 DevKit  
+- Capteur **LD2410** (radar présence + distance)  
+- Relais commandé en GPIO  
+- Écran **LCD 16x2** (via PCF8574 en I2C)  
+- Bouton poussoir (arrêt d’urgence)  
+- Alimentation 5V  
 
-# Intégration Home Assistant
-api:
+---
 
-# Mise à jour OTA
-ota:
-  - platform: esphome
+## 🔧 Installation
+1. Installer [ESPHome](https://esphome.io/) sur votre machine.  
+2. Copier la configuration YAML (`autostopstart.yaml`) dans votre projet ESPHome.  
+3. Adapter si nécessaire les **GPIO** (LCD, bouton, relais, LD2410).  
+4. Compiler et flasher le firmware sur l’ESP32.  
+5. Configurer le Wi-Fi via le **portail captif** ou via l’interface **improv_serial**.  
 
-# Provisionnement Wi-Fi via port série
-improv_serial:
+---
 
-# Point d'accès Wi-Fi pour configuration
-wifi:
-  ap: {}
+## 📊 Schéma bloc fonctionnel
 
-captive_portal:   # Portail captif pour provisionner le Wi-Fi
+```mermaid
+flowchart LR
 
-# Import Dashboard (utile pour mise à jour depuis l’UI ESPHome)
-dashboard_import:
-  package_import_url: github://esphome/example-configs/esphome-web/esp32.yaml@main
-  import_full_config: true
+A["Capteur LD2410<br/>Détection distance + présence"] --> B["Logique de contrôle"]
 
-# Webserver local pour debug
-web_server:
+B -->|"Distance < seuil<br/>et délai écoulé"| C["Activation relais"]
+B -->|"Distance >= seuil<br/>ou délai écoulé"| D["Désactivation relais"]
 
-# === Variables globales ===
-globals:
-  - id: countdown_timer
-    type: int
-    restore_value: yes
-    initial_value: '0'
-  - id: relay_on
-    type: bool
-    restore_value: yes
-    initial_value: '0'
-  - id: delay_on        # Temps avant allumage relais
-    type: int
-    restore_value: yes
-    initial_value: '120'
-  - id: delay_off       # Temps avant extinction relais
-    type: int
-    restore_value: yes
-    initial_value: '20'
-  - id: distance        # Distance de déclenchement en cm
-    type: int
-    restore_value: yes
-    initial_value: '300'
-  - id: emergency_active
-    type: bool
-    restore_value: no
-    initial_value: 'false'
+E["Bouton STOP<br/>(prioritaire)"] -->|"Appui immédiat"| D
 
-# === Bus I2C pour l’écran LCD ===
-i2c:
-  sda: GPIO21
-  scl: GPIO22
-  scan: true
+C --> F["Afficheur LCD<br/>Distance + Etat relais + Timer"]
+D --> F
+```
 
-# === Afficheur LCD ===
-display:
-  - platform: lcd_pcf8574
-    id: lcd_display
-    dimensions: 16x2
-    address: 0x27
-    update_interval: 1s
-    lambda: |-
-      // 🔴 Si arrêt d'urgence actif : priorité absolue
-      if (id(emergency_active)) {
-        it.print(12, 0, "STOP");    // Affiche STOP
-        it.print(0, 1, "OFF");      // Forcer affichage OFF
-        it.printf(4, 1, "[0] %3ds", id(countdown_timer)); 
-        return; // ⛔ Sortie immédiate : aucune autre logique exécutée
-      }
+---
 
-      // ⏱️ Décrément du compteur uniquement si pas en urgence
-      if (id(countdown_timer) > 0) {
-        id(countdown_timer) -= 1;
-      }
+## 🔁 Flowchart détaillé
 
-      // 📏 Affichage distance
-      if (id(moving_distance).has_state()) {
-        it.printf(0, 0, "%3.0fcm", id(moving_distance).state);
+```mermaid
+flowchart TD
 
-        // ⚡ Allumage relais si distance < seuil et timer expiré
-        if (id(moving_distance).state < id(distance) && id(countdown_timer) == 0) {
-          id(relay).turn_on();
-          id(countdown_timer) = id(delay_on);
-        }
-      }
+A["Boot ESP32"] --> B["Initialisation variables & sliders"]
+B --> C["LCD allumé à 50%"]
 
-      // ⏹️ Extinction relais si timer écoulé
-      if (id(relay).state && id(countdown_timer) == 0) {
-        id(relay).turn_off();
-        id(countdown_timer) = id(delay_off);
-      }
+C --> D["Lecture LD2410 (distance, présence...)"]
+D --> E{"Bouton STOP appuyé ?"}
 
-      // 💡 Affichage état relais et compteur
-      it.print(0, 1, id(relay).state ? "ON " : "OFF");
-      it.printf(4, 1, "[%1d] %3ds", id(relay).state ? 1 : 0, id(countdown_timer));
+E -- Oui --> F["Affiche 'STOP' sur LCD"]
+F --> G["Relais OFF"]
+G --> H["Countdown = delay_off"]
 
-# === Rétroéclairage LCD ===
-output:
-  - platform: ledc
-    id: lcd_backlight
-    pin: GPIO32
-    frequency: 1000Hz
+E -- Non --> I["Affiche distance sur LCD"]
 
-light:
-  - platform: monochromatic
-    output: lcd_backlight
-    name: "LCD Backlight"
+I --> J{"Distance < seuil ?"}
+J -- Non --> K["Pas d'action"]
+J -- Oui --> L{"Countdown == 0 ?"}
 
-# === Capteur LD2410 (présence) ===
-uart:
-  tx_pin: GPIO18
-  rx_pin: GPIO19
-  baud_rate: 256000  # Communication rapide pour LD2410
+L -- Non --> M["Attendre fin du compte à rebours"]
+L -- Oui --> N["Relais ON"]
+N --> O["Countdown = delay_on"]
 
-ld2410:
+O --> P{"Relais ON ?"}
+P -- Oui --> Q{"Countdown == 0 ?"}
+Q -- Non --> R["Affiche 'ON' et countdown sur LCD"]
+Q -- Oui --> S["Relais OFF"]
+S --> T["Countdown = delay_off"]
 
-# === Relais de commande ===
-switch:
-  - platform: gpio
-    pin: GPIO13
-    name: "Relay"
-    id: relay
-    # Sécurité : extinction auto après 5 minutes
-    on_turn_on:
-      - delay: 300000ms
-      - switch.turn_off: relay
+P -- Non --> U["Affiche 'OFF' et countdown sur LCD"]
+R --> D
+U --> D
+T --> D
+H --> D
+```
 
-  - platform: ld2410
-    engineering_mode:
-      name: "Engineering Mode"
-    bluetooth:
-      name: "LD2410 Bluetooth"
+---
 
-# === Capteurs LD2410 ===
-sensor:
-  - platform: ld2410
-    light:
-      name: Ambient Light
-    moving_distance:
-      id: moving_distance
-      name : "Moving Distance"
-    still_distance:
-      name: "Still Distance"
-    moving_energy:
-      name: "Moving Energy"
-    still_energy:
-      name: "Still Energy"
-    detection_distance:
-      id: ld2410_distance
-      name: "Detection Distance"
+## 🔁 Flowchart simplifié
 
-    # Énergie par zones g0 → g8
-    g0: { move_energy: { name: "g0 Move Energy" }, still_energy: { name: "g0 Still Energy" } }
-    g1: { move_energy: { name: "g1 Move Energy" }, still_energy: { name: "g1 Still Energy" } }
-    g2: { move_energy: { name: "g2 Move Energy" }, still_energy: { name: "g2 Still Energy" } }
-    g3: { move_energy: { name: "g3 Move Energy" }, still_energy: { name: "g3 Still Energy" } }
-    g4: { move_energy: { name: "g4 Move Energy" }, still_energy: { name: "g4 Still Energy" } }
-    g5: { move_energy: { name: "g5 Move Energy" }, still_energy: { name: "g5 Still Energy" } }
-    g6: { move_energy: { name: "g6 Move Energy" }, still_energy: { name: "g6 Still Energy" } }
-    g7: { move_energy: { name: "g7 Move Energy" }, still_energy: { name: "g7 Still Energy" } }
-    g8: { move_energy: { name: "g8 Move Energy" }, still_energy: { name: "g8 Still Energy" } }
+```mermaid
+flowchart TD
 
-# === Détection de présence ===
-binary_sensor:
-  - platform: ld2410
-    has_target:
-      id: Presence
-      name: "Presence"
-    has_moving_target:
-      id: Move
-      name: "Moving Target"
-    has_still_target:
-      id: still
-      name: "Still Target"
-    out_pin_presence_status:
-      name: "Out Pin Presence Status"
+A[Démarrage système] --> B[Initialisation paramètres]
+B --> C[Lecture capteur de distance]
 
-# === Arrêt d'urgence ===
-  - platform: gpio
-    pin:
-      number: GPIO23
-      mode: INPUT_PULLUP
-      inverted: true
-    id: emergency_stop
-    name: "Emergency Stop Button"
+C --> D{Bouton STOP appuyé ?}
+D -- Oui --> E[Relais OFF + Affiche STOP]
+D -- Non --> F{Distance < seuil ?}
 
-    on_press:
-      then:
-        - logger.log: "⚠️ ARRET D'URGENCE ACTIVÉ !"
-        - switch.turn_off: relay
-        - globals.set:
-            id: relay_on
-            value: 'false'
-        - globals.set:
-            id: countdown_timer
-            value: !lambda 'return id(delay_off);'
-        - lambda: |-
-            // Forcer l'affichage immédiat STOP
-            id(lcd_display).print(12, 0, "STOP");
+F -- Non --> G[Maintien état actuel]
+F -- Oui --> H{Relais déjà actif ?}
 
-    on_release:
-      then:
-        - logger.log: "✅ Bouton d'urgence relâché"
-        - lambda: |-
-            // Effacer STOP immédiatement
-            id(lcd_display).print(12, 0, "    ");
+H -- Non --> I[Relais ON + Début temporisation ON]
+H -- Oui --> J{Temps ON écoulé ?}
 
-# === Infos système ===
-text_sensor:
-  - platform: wifi_info
-    ip_address:
-      name: "${friendly_name} IP Address"
-      id: device_ip_address
+J -- Oui --> K[Relais OFF + Début temporisation OFF]
+J -- Non --> L[Maintien relais ON]
 
-# === Paramètres configurables depuis HA ===
-number:
-  - platform: template
-    name: "Delay ON (s)"
-    id: delay_on_slider
-    min_value: 1
-    max_value: 600
-    step: 1
-    initial_value: 120
-    restore_value: true
-    optimistic: true
-    on_value:
-      - globals.set:
-          id: delay_on
-          value: !lambda 'return (int)x;'
+E --> C
+G --> C
+I --> C
+L --> C
+K --> C
+```
 
-  - platform: template
-    name: "Delay OFF (s)"
-    id: delay_off_slider
-    min_value: 1
-    max_value: 600
-    step: 1
-    initial_value: 20
-    restore_value: true
-    optimistic: true
-    on_value:
-      - globals.set:
-          id: delay_off
-          value: !lambda 'return (int)x;'
+---
 
-  - platform: template
-    name: "Distance (cm)"
-    id: distance_slider
-    min_value: 1
-    max_value: 600
-    step: 1
-    initial_value: 150
-    restore_value: true
-    optimistic: true
-    on_value:
-      - globals.set:
-          id: distance
-          value: !lambda 'return (int)x;'
+## 🛑 Gestion du bouton STOP
+- Le bouton est câblé en **GPIO23** avec **pull-up** et inversion logique.  
+- Lors d’un **appui**, l’ESP32 :  
+  1. Coupe immédiatement le relais (`relay OFF`).  
+  2. Réinitialise le compteur OFF (`countdown = delay_off`).  
+  3. Affiche **STOP** sur le LCD.  
 
-# === Bouton redémarrage ===
-button:
-  - platform: restart
-    name: "Restart Device"
+⚡ **Priorité absolue** : cette logique est traitée **immédiatement** via `on_press:` et ne dépend pas du cycle d’affichage du LCD.  
+
+---
+
+## 🔀 États du système
+
+| État            | Description                                                       |
+| --------------- | ----------------------------------------------------------------- |
+| `En_veille`     | Mécanisme à l’arrêt, en attente de détection de présence < 1 m.   |
+| `Actif`         | Mécanisme en fonctionnement pendant la présence.                  |
+| `Pause_bouton`  | Pause temporaire de 10 secondes après appui sur le bouton.        |
+| `Temporisation` | Délai de 30 secondes sans détection avant arrêt complet.          |
+
+---
+
+## 🔄 Règles de transition
+
+| État actuel     | Événement                      | État suivant    | Action                       |
+| --------------- | ------------------------------ | --------------- | ---------------------------- |
+| `En_veille`     | Détection d’un visiteur < 1 m  | `Actif`         | Démarrer le mécanisme        |
+| `Actif`         | Bouton appuyé                  | `Pause_bouton`  | Arrêter le mécanisme 10s     |
+| `Actif`         | Plus de détection              | `Temporisation` | Lancer le timer de 30s       |
+| `Actif`         | Présence maintenue             | `Actif`         | Maintenir actif, reset timer |
+| `Pause_bouton`  | Fin des 10s, présence détectée | `Actif`         | Redémarrer le mécanisme      |
+| `Pause_bouton`  | Fin des 10s, aucune détection  | `Temporisation` | Lancer le timer de 30s       |
+| `Temporisation` | Détection < 1 m                | `Actif`         | Redémarrer le mécanisme      |
+| `Temporisation` | 30s écoulées sans détection    | `En_veille`     | Arrêt complet                |
+
+---
+
+## 📐 Diagramme machine à états
+
+```mermaid
+stateDiagram-v2
+    [*] --> En_veille
+
+    En_veille --> Actif : détection < 1m
+
+    Actif --> Pause_bouton : bouton appuyé
+    Actif --> Temporisation : plus de détection
+    Actif --> Actif : détection maintenue
+
+    Pause_bouton --> Actif : fin des 10s
+et détection présente
+    Pause_bouton --> Temporisation : fin des 10s
+et pas de détection
+
+    Temporisation --> Actif : détection < 1m
+    Temporisation --> En_veille : 30s sans détection
+
+    En_veille --> [*]
+```
+
+---
+
+## ⚙️ Paramètres configurables
+Depuis Home Assistant (ou via API ESPHome), il est possible de régler :  
+- ⏱️ **Delay ON (s)** : durée d’activation relais après détection.  
+- ⏱️ **Delay OFF (s)** : durée d’inhibition relais après extinction.  
+- 📏 **Distance (cm)** : seuil de déclenchement du relais.  
+
+---
+
+## 📌 Fonctionnalité
+- ✅ Actif si présence < 1m  
+- ✅ Bouton = pause 10s  
+- ✅ Timeout d’absence = 30s  
+- ✅ Redémarrage auto si présence persiste après la pause  
+
+---
+
+## 👤 Auteur
+Projet développé avec **ESPHome + ESP32 + LD2410**, optimisé et documenté pour usage personnel ou domotique.

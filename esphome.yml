@@ -11,7 +11,7 @@ esphome:
     name: esphome.web
     version: dev
   on_boot:
-    priority: -100  # S'assurer que tout est initialisé
+    priority: -100  # Exécuté très tôt pour garantir que les sliders reflètent les valeurs globales
     then:
       - number.set:
           id: delay_on_slider
@@ -24,41 +24,42 @@ esphome:
           value: !lambda 'return id(distance);'
       - output.set_level:
           id: lcd_backlight
-          level: 0.5
+          level: 0.5   # Luminosité initiale de l'écran LCD
 
 esp32:
   board: esp32dev
   framework:
-    type: arduino
+    type: esp-idf
+    version: recommended
 
-# Enable logging
+# Logs série
 logger:
 
-# Enable Home Assistant API
+# Intégration Home Assistant
 api:
 
-# Allow Over-The-Air updates
+# Mise à jour OTA
 ota:
-- platform: esphome
+  - platform: esphome
 
-# Allow provisioning Wi-Fi via serial
+# Provisionnement Wi-Fi via port série
 improv_serial:
 
+# Point d'accès Wi-Fi pour configuration
 wifi:
-  # Set up a wifi access point
   ap: {}
 
-# In combination with the `ap` this allows the user
-# to provision wifi credentials to the device via WiFi AP.
-captive_portal:
+captive_portal:   # Portail captif pour provisionner le Wi-Fi
 
+# Import Dashboard (utile pour mise à jour depuis l’UI ESPHome)
 dashboard_import:
   package_import_url: github://esphome/example-configs/esphome-web/esp32.yaml@main
   import_full_config: true
 
-# To have a "next url" for improv serial
+# Webserver local pour debug
 web_server:
 
+# === Variables globales ===
 globals:
   - id: countdown_timer
     type: int
@@ -68,23 +69,30 @@ globals:
     type: bool
     restore_value: yes
     initial_value: '0'
-  - id: delay_on
+  - id: delay_on        # Temps avant allumage relais
     type: int
     restore_value: yes
     initial_value: '120'
-  - id: delay_off
+  - id: delay_off       # Temps avant extinction relais
     type: int
     restore_value: yes
     initial_value: '20'
-  - id: distance
+  - id: distance        # Distance de déclenchement en cm
     type: int
     restore_value: yes
-    initial_value: '150'
+    initial_value: '300'
+  - id: emergency_active
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+# === Bus I2C pour l’écran LCD ===
 i2c:
   sda: GPIO21
   scl: GPIO22
   scan: true
 
+# === Afficheur LCD ===
 display:
   - platform: lcd_pcf8574
     id: lcd_display
@@ -92,46 +100,41 @@ display:
     address: 0x27
     update_interval: 1s
     lambda: |-
-      if (id(countdown_timer)>0) {
-        id (countdown_timer) -= 1;
+      // 🔴 Si arrêt d'urgence actif : priorité absolue
+      if (id(emergency_active)) {
+        it.print(12, 0, "STOP");    // Affiche STOP
+        it.print(0, 1, "OFF");      // Forcer affichage OFF
+        it.printf(4, 1, "[0] %3ds", id(countdown_timer)); 
+        return; // ⛔ Sortie immédiate : aucune autre logique exécutée
       }
 
-      if (id(emergency_stop).state) {
-        it.print(12, 0, "STOP");
-        id(relay_on) = 0;
+      // ⏱️ Décrément du compteur uniquement si pas en urgence
+      if (id(countdown_timer) > 0) {
+        id(countdown_timer) -= 1;
+      }
+
+      // 📏 Affichage distance
+      if (id(moving_distance).has_state()) {
+        it.printf(0, 0, "%3.0fcm", id(moving_distance).state);
+
+        // ⚡ Allumage relais si distance < seuil et timer expiré
+        if (id(moving_distance).state < id(distance) && id(countdown_timer) == 0) {
+          id(relay).turn_on();
+          id(countdown_timer) = id(delay_on);
+        }
+      }
+
+      // ⏹️ Extinction relais si timer écoulé
+      if (id(relay).state && id(countdown_timer) == 0) {
         id(relay).turn_off();
-        id(countdown_timer)=id(delay_off);
-      }
-      else {
-        it.print(12, 0, "    ");
-        if (id(moving_distance).has_state()) {
-          it.printf(0, 0, "%3.0fcm", id(moving_distance).state); 
-          if (id(moving_distance).state < id(distance)) {
-            if (id(countdown_timer) == 0) {
-              id(relay_on) = 1;
-              id(relay).turn_on();
-              id(countdown_timer)=120;
-            }
-          }
-        }
+        id(countdown_timer) = id(delay_off);
       }
 
-      if (id(relay).state) {
-        if (id(countdown_timer) == 0) {
-          id(relay).turn_off();
-          id(relay_on) = 0;
-          id(countdown_timer)=20;
-        }
-      }
+      // 💡 Affichage état relais et compteur
+      it.print(0, 1, id(relay).state ? "ON " : "OFF");
+      it.printf(4, 1, "[%1d] %3ds", id(relay).state ? 1 : 0, id(countdown_timer));
 
-      if (id(relay).state) {
-        it.print(0, 1, "ON ");
-      }
-      else {
-        it.print(0, 1, "OFF");
-      }
-      it.printf(4, 1, "[%1d] %3ds", id(relay_on), id(countdown_timer)); 
-
+# === Rétroéclairage LCD ===
 output:
   - platform: ledc
     id: lcd_backlight
@@ -143,131 +146,113 @@ light:
     output: lcd_backlight
     name: "LCD Backlight"
 
+# === Capteur LD2410 (présence) ===
 uart:
   tx_pin: GPIO18
   rx_pin: GPIO19
-  baud_rate: 256000  # LD2410 utilise une communication rapide
+  baud_rate: 256000  # Communication rapide pour LD2410
 
 ld2410:
 
+# === Relais de commande ===
 switch:
   - platform: gpio
     pin: GPIO13
     name: "Relay"
     id: relay
+    # Sécurité : extinction auto après 5 minutes
     on_turn_on:
-    - delay: 300000ms
-    - switch.turn_off: relay
+      - delay: 300000ms
+      - switch.turn_off: relay
 
   - platform: ld2410
     engineering_mode:
-      name: "engineering mode"
+      name: "Engineering Mode"
     bluetooth:
-      name: "control bluetooth"
+      name: "LD2410 Bluetooth"
 
+# === Capteurs LD2410 ===
 sensor:
   - platform: ld2410
     light:
-      name: light
+      name: Ambient Light
     moving_distance:
       id: moving_distance
-      name : Moving Distance
+      name : "Moving Distance"
     still_distance:
-      name: Still Distance
+      name: "Still Distance"
     moving_energy:
-      name: Move Energy
+      name: "Moving Energy"
     still_energy:
-      name: Still Energy
+      name: "Still Energy"
     detection_distance:
-      name: Detection Distance
       id: ld2410_distance
-#      on_value:
-#        then:
-#          - if:
-#              condition:
-#                lambda: 'return ((id(ld2410_distance).state < 100) and (id(timer_off)=0);'
-#              then:
-#                - logger.log: "Distance inférieure à 100 cm, activation du relais"
-#                - switch.turn_on: relay
+      name: "Detection Distance"
 
-    g0:
-      move_energy:
-        name: g0 move energy
-      still_energy:
-        name: g0 still energy
-    g1:
-      move_energy:
-        name: g1 move energy
-      still_energy:
-        name: g1 still energy
-    g2:
-      move_energy:
-        name: g2 move energy
-      still_energy:
-        name: g2 still energy
-    g3:
-      move_energy:
-        name: g3 move energy
-      still_energy:
-        name: g3 still energy
-    g4:
-      move_energy:
-        name: g4 move energy
-      still_energy:
-        name: g4 still energy
-    g5:
-      move_energy:
-        name: g5 move energy
-      still_energy:
-        name: g5 still energy
-    g6:
-      move_energy:
-        name: g6 move energy
-      still_energy:
-        name: g6 still energy
-    g7:
-      move_energy:
-        name: g7 move energy
-      still_energy:
-        name: g7 still energy
-    g8:
-      move_energy:
-        name: g8 move energy
-      still_energy:
-        name: g8 still energy
+    # Énergie par zones g0 → g8
+    g0: { move_energy: { name: "g0 Move Energy" }, still_energy: { name: "g0 Still Energy" } }
+    g1: { move_energy: { name: "g1 Move Energy" }, still_energy: { name: "g1 Still Energy" } }
+    g2: { move_energy: { name: "g2 Move Energy" }, still_energy: { name: "g2 Still Energy" } }
+    g3: { move_energy: { name: "g3 Move Energy" }, still_energy: { name: "g3 Still Energy" } }
+    g4: { move_energy: { name: "g4 Move Energy" }, still_energy: { name: "g4 Still Energy" } }
+    g5: { move_energy: { name: "g5 Move Energy" }, still_energy: { name: "g5 Still Energy" } }
+    g6: { move_energy: { name: "g6 Move Energy" }, still_energy: { name: "g6 Still Energy" } }
+    g7: { move_energy: { name: "g7 Move Energy" }, still_energy: { name: "g7 Still Energy" } }
+    g8: { move_energy: { name: "g8 Move Energy" }, still_energy: { name: "g8 Still Energy" } }
 
+# === Détection de présence ===
 binary_sensor:
-
   - platform: ld2410
     has_target:
       id: Presence
-      name: Presence
+      name: "Presence"
     has_moving_target:
       id: Move
-      name: Moving Target
+      name: "Moving Target"
     has_still_target:
       id: still
-      name: Still Target
+      name: "Still Target"
     out_pin_presence_status:
-      name: out pin presence status
+      name: "Out Pin Presence Status"
 
+# === Arrêt d'urgence ===
   - platform: gpio
     pin:
       number: GPIO23
       mode: INPUT_PULLUP
       inverted: true
     id: emergency_stop
-    name: "Bouton GPIO15"
+    name: "Emergency Stop Button"
+
     on_press:
       then:
-        - logger.log: "Bouton appuyé !"
+        - logger.log: "⚠️ ARRET D'URGENCE ACTIVÉ !"
+        - switch.turn_off: relay
+        - globals.set:
+            id: relay_on
+            value: 'false'
+        - globals.set:
+            id: countdown_timer
+            value: !lambda 'return id(delay_off);'
+        - lambda: |-
+            // Forcer l'affichage immédiat STOP
+            id(lcd_display).print(12, 0, "STOP");
 
+    on_release:
+      then:
+        - logger.log: "✅ Bouton d'urgence relâché"
+        - lambda: |-
+            // Effacer STOP immédiatement
+            id(lcd_display).print(12, 0, "    ");
+
+# === Infos système ===
 text_sensor:
   - platform: wifi_info
     ip_address:
       name: "${friendly_name} IP Address"
       id: device_ip_address
 
+# === Paramètres configurables depuis HA ===
 number:
   - platform: template
     name: "Delay ON (s)"
@@ -279,10 +264,9 @@ number:
     restore_value: true
     optimistic: true
     on_value:
-      then:
-        - globals.set:
-            id: delay_on
-            value: !lambda 'return (int)x;'
+      - globals.set:
+          id: delay_on
+          value: !lambda 'return (int)x;'
 
   - platform: template
     name: "Delay OFF (s)"
@@ -294,10 +278,9 @@ number:
     restore_value: true
     optimistic: true
     on_value:
-      then:
-        - globals.set:
-            id: delay_off
-            value: !lambda 'return (int)x;'
+      - globals.set:
+          id: delay_off
+          value: !lambda 'return (int)x;'
 
   - platform: template
     name: "Distance (cm)"
@@ -309,11 +292,11 @@ number:
     restore_value: true
     optimistic: true
     on_value:
-      then:
-        - globals.set:
-            id: distance
-            value: !lambda 'return (int)x;'
+      - globals.set:
+          id: distance
+          value: !lambda 'return (int)x;'
 
+# === Bouton redémarrage ===
 button:
   - platform: restart
-    name: "Restart!"
+    name: "Restart Device"
