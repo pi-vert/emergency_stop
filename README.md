@@ -29,37 +29,37 @@ Ajouter un mécanisme de marche/arrêt à un automate en fonction de la position
 ```mermaid
 flowchart TD
 
-A[Boot ESP32] --> B[Initialisation variables & sliders]
+A["Boot ESP32] --> B[Initialisation variables & sliders"]
 B --> C[LCD allumé à 50%]
 
 %% Boucle principale
-C --> D[Lecture LD2410 (distance, présence...)]
-D --> E{Bouton STOP appuyé ?}
+C --> D["Lecture LD2410 (distance, présence...)"]
+D --> E{"Bouton STOP appuyé ?"}
 
 %% Gestion arrêt d'urgence
-E -- Oui --> F[Affiche "STOP" sur LCD]
-F --> G[Relais OFF]
-G --> H[Countdown = delay_off]
+E -- Oui --> F["Affiche 'STOP' sur LCD"]
+F --> G["Relais OFF"]
+G --> H["Countdown = delay_off"]
 
-E -- Non --> I[Affiche distance sur LCD]
+E -- Non --> I["Affiche distance sur LCD"]
 
 %% Vérification distance
-I --> J{Distance < seuil ?}
-J -- Non --> K[Pas d'action]
-J -- Oui --> L{Countdown == 0 ?}
+I --> J{"Distance < seuil ?"}
+J -- Non --> K["Pas d'action"]
+J -- Oui --> L{"Countdown == 0 ?"}
 
-L -- Non --> M[Attendre fin du compte à rebours]
-L -- Oui --> N[Relais ON]
-N --> O[Countdown = delay_on]
+L -- Non --> M["Attendre fin du compte à rebours"]
+L -- Oui --> N["Relais ON"]
+N --> O["Countdown = delay_on"]
 
 %% Gestion relais actif
-O --> P{Relais ON ?}
-P -- Oui --> Q{Countdown == 0 ?}
-Q -- Non --> R[Affiche "ON" et countdown sur LCD]
-Q -- Oui --> S[Relais OFF]
-S --> T[Countdown = delay_off]
+O --> P{"Relais ON ?"}
+P -- Oui --> Q{"Countdown == 0 ?"}
+Q -- Non --> R["Affiche 'ON' et countdown sur LCD"]
+Q -- Oui --> S["Relais OFF"]
+S --> T["Countdown = delay_off"]
 
-P -- Non --> U[Affiche "OFF" et countdown sur LCD]
+P -- Non --> U["Affiche 'OFF' et countdown sur LCD"]
 R --> D
 U --> D
 T --> D
