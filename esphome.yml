@@ -10,6 +10,21 @@ esphome:
   project:
     name: esphome.web
     version: dev
+  on_boot:
+    priority: -100  # S'assurer que tout est initialisé
+    then:
+      - number.set:
+          id: delay_on_slider
+          value: !lambda 'return id(delay_on);'
+      - number.set:
+          id: delay_off_slider
+          value: !lambda 'return id(delay_off);'
+      - number.set:
+          id: distance_slider
+          value: !lambda 'return id(distance);'
+      - output.set_level:
+          id: lcd_backlight
+          level: 0.5
 
 esp32:
   board: esp32dev
@@ -53,7 +68,18 @@ globals:
     type: bool
     restore_value: yes
     initial_value: '0'
-
+  - id: delay_on
+    type: int
+    restore_value: yes
+    initial_value: '120'
+  - id: delay_off
+    type: int
+    restore_value: yes
+    initial_value: '20'
+  - id: distance
+    type: int
+    restore_value: yes
+    initial_value: '150'
 i2c:
   sda: GPIO21
   scl: GPIO22
@@ -74,17 +100,17 @@ display:
         it.print(12, 0, "STOP");
         id(relay_on) = 0;
         id(relay).turn_off();
-        id(countdown_timer)=10;
+        id(countdown_timer)=id(delay_off);
       }
       else {
         it.print(12, 0, "    ");
         if (id(moving_distance).has_state()) {
           it.printf(0, 0, "%3.0fcm", id(moving_distance).state); 
-          if (id(moving_distance).state < 100) {
+          if (id(moving_distance).state < id(distance)) {
             if (id(countdown_timer) == 0) {
               id(relay_on) = 1;
               id(relay).turn_on();
-              id(countdown_timer)=30;
+              id(countdown_timer)=120;
             }
           }
         }
@@ -94,7 +120,7 @@ display:
         if (id(countdown_timer) == 0) {
           id(relay).turn_off();
           id(relay_on) = 0;
-          id(countdown_timer)=10;
+          id(countdown_timer)=20;
         }
       }
 
@@ -228,12 +254,13 @@ binary_sensor:
   - platform: gpio
     pin:
       number: GPIO23
-      inverted: true    
+      mode: INPUT_PULLUP
+      inverted: true
     id: emergency_stop
-    name: "Stop"
+    name: "Bouton GPIO15"
     on_press:
       then:
-        - switch.turn_off: relay
+        - logger.log: "Bouton appuyé !"
 
 text_sensor:
   - platform: wifi_info
@@ -241,3 +268,52 @@ text_sensor:
       name: "${friendly_name} IP Address"
       id: device_ip_address
 
+number:
+  - platform: template
+    name: "Delay ON (s)"
+    id: delay_on_slider
+    min_value: 1
+    max_value: 600
+    step: 1
+    initial_value: 120
+    restore_value: true
+    optimistic: true
+    on_value:
+      then:
+        - globals.set:
+            id: delay_on
+            value: !lambda 'return (int)x;'
+
+  - platform: template
+    name: "Delay OFF (s)"
+    id: delay_off_slider
+    min_value: 1
+    max_value: 600
+    step: 1
+    initial_value: 20
+    restore_value: true
+    optimistic: true
+    on_value:
+      then:
+        - globals.set:
+            id: delay_off
+            value: !lambda 'return (int)x;'
+
+  - platform: template
+    name: "Distance (cm)"
+    id: distance_slider
+    min_value: 1
+    max_value: 600
+    step: 1
+    initial_value: 150
+    restore_value: true
+    optimistic: true
+    on_value:
+      then:
+        - globals.set:
+            id: distance
+            value: !lambda 'return (int)x;'
+
+button:
+  - platform: restart
+    name: "Restart!"
